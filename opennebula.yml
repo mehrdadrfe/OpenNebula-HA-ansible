@@ -1,0 +1,9 @@
+---
+- hosts: one
+  user: runc
+  become: yes
+
+  roles:
+    - opennebula-yum-repos
+    - opennebula-node
+    - opennebula-ha

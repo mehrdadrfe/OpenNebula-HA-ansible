@@ -1,0 +1,167 @@
+---
+
+- name: Generate SSH keys
+  shell: ssh-keygen -q -t rsa -f ~/.ssh/id_rsa -N ''
+  args:
+    creates: ~/.ssh/id_rsa
+  become:      yes
+  become_user: oneadmin
+
+- name: Register SSH keys
+  shell: /bin/cat ~/.ssh/id_rsa.pub
+  register: ssh_keys
+  become:      yes
+  become_user: oneadmin
+
+- name: Add SSH keys
+  lineinfile:
+    dest: ~/.ssh/authorized_keys
+    state: present
+    line:  " {{ hostvars[item]['ssh_keys']['stdout'] }}"
+  become:      yes
+  become_user: oneadmin
+  with_items: "{{ groups['one'] }}"
+
+- name: ECDSA host key
+  shell: ssh-keyscan "{{ item }}" >> ~/.ssh/known_hosts
+  become:      yes
+  become_user: oneadmin
+  with_items:
+    - "{{ opennebula_ha_leader }}"
+    - "{{ opennebula_ha_follower }}"
+
+- name: Configuration of the initial leader - Leader - Start OpenNebula
+  when: inventory_hostname == opennebula_ha_leader
+  service:
+    name:     "{{ item }}"
+    state:    started
+    enabled:  true
+  with_items:
+    - opennebula
+
+- name: Configuration of the initial leader - Leader - initial check of the zone
+  when: inventory_hostname == opennebula_ha_leader
+  command:     "onezone show 0"
+  become:      yes
+  become_user: oneadmin
+  register:    onezone_show_0_check_initial_leader
+
+- name: Configuration of the initial leader - Leader - Add the server itself to the zone
+  when: inventory_hostname == opennebula_ha_leader and opennebula_ha_leader not in onezone_show_0_check_initial_leader.stdout
+  command:     "onezone server-add 0 --name {{ opennebula_ha_leader }} --rpc http://{{ opennebula_ha_leader }}:2633/RPC2"
+  become:      yes
+  become_user: oneadmin
+
+- name: Configuration of the initial leader - Leader - check the zone for solo
+  when: inventory_hostname == opennebula_ha_leader and opennebula_ha_leader not in onezone_show_0_check_initial_leader.stdout
+  command:     "onezone show 0"
+  become:      yes
+  become_user: oneadmin
+  register:    onezone_show_0_check_solo
+  failed_when: "'solo' not in onezone_show_0_check_solo.stdout or onezone_show_0_check_solo.rc != 0"
+
+- name: Configuration of the initial leader - Leader - Stop OpenNebula service
+  when: inventory_hostname == opennebula_ha_leader
+  service:
+    name:     "{{ item }}"
+    state:    stopped
+    enabled:  true
+  with_items:
+    - opennebula
+
+- name: Configuration of the initial leader - Leader - update SERVER_ID in /etc/one/oned.conf
+  when: inventory_hostname == opennebula_ha_leader
+  lineinfile:
+    path:   /etc/one/oned.conf
+    regexp: '^(\s)*SERVER_ID(\s)+=(\s)+.*,.*'
+    line:   "SERVER_ID = {{ groups['one'].index(inventory_hostname) }},  # MODIFIED BY ANSIBLE"
+
+- name: Configuration of the initial leader - Leader - Start OpenNebula
+  when: inventory_hostname == opennebula_ha_leader
+  service:
+    name:     "{{ item }}"
+    state:    started
+    enabled:  true
+  with_items:
+  - opennebula
+
+- name: Configuration of the initial leader - Leader - check the zone for leader
+  when: inventory_hostname == opennebula_ha_leader
+  command:     "onezone show 0"
+  become:      yes
+  become_user: oneadmin
+  register:    onezone_show_0_check_leader
+  failed_when: "'leader' not in onezone_show_0_check_leader.stdout or onezone_show_0_check_leader.rc != 0"
+
+- name: Adding more servers - Leader - Create a DB backup in the initial leader
+  when: inventory_hostname == opennebula_ha_leader
+  command:     "onedb backup -u root -p {{ oneadmin_pwd }} -d opennebula /tmp/my_backup.db -f"
+
+#########################Follower########################
+
+- name: Adding more servers - Follower - Remove /var/lib/one/.one
+  when: inventory_hostname == opennebula_ha_follower
+  file:
+    path:  "/var/lib/one/.one"
+    state: absent
+
+- name: Adding more servers - Leader - Copy /var/lib/one/.one to Follower
+  when: inventory_hostname == opennebula_ha_follower
+  command: "scp -rp oneadmin@{{ opennebula_ha_leader }}:/var/lib/one/.one /var/lib/one"
+  args:
+    creates: /var/lib/one/.one
+  become:      yes
+  become_user: oneadmin
+  delegate_to: "{{ opennebula_ha_follower }}"
+
+- name: Adding more servers - Leader - Copy database backup to Follower
+  when: inventory_hostname == opennebula_ha_follower
+  command: "scp -rp oneadmin@{{ opennebula_ha_leader }}:/tmp/my_backup.db /tmp"
+  args:
+    creates: /tmp/my_backup.db
+  become:      yes
+  become_user: oneadmin
+  delegate_to: "{{ opennebula_ha_follower }}"
+
+- name: Adding more servers - Follower - Stop OpenNebula service
+  when: inventory_hostname == opennebula_ha_follower
+  service:
+    name:     "{{ item }}"
+    state:    stopped
+    enabled:  true
+  with_items:
+    - opennebula
+
+- name: Adding more servers - Leader - Add the server itself to the zone
+  when: inventory_hostname == opennebula_ha_leader
+  command:     "onezone server-add 0 --name {{ opennebula_ha_follower }} --rpc http://{{ opennebula_ha_follower }}:2633/RPC2"
+
+- name: Adding more servers - Leader - check the zone for error
+  when: inventory_hostname == opennebula_ha_leader
+  command:     "onezone show 0"
+  register:    onezone_show_0_check_error
+  failed_when: "'error' not in onezone_show_0_check_error.stdout or onezone_show_0_check_error.rc != 0"
+
+- name: Adding more servers - Follower - update SERVER_ID in /etc/one/oned.conf
+  when: inventory_hostname == opennebula_ha_follower
+  lineinfile:
+    path:   /etc/one/oned.conf
+    regexp: '^(\s)*SERVER_ID(\s)+=(\s)+.*,.*'
+    line:   "SERVER_ID = {{ groups['one'].index(inventory_hostname) }},  # MODIFIED BY ANSIBLE"
+
+- name: Adding more servers - Follower - Start OpenNebula
+  when: inventory_hostname == opennebula_ha_follower
+  service:
+    name:     "{{ item }}"
+    state:    started
+    enabled:  true
+  with_items:
+    - opennebula
+
+- name: Adding more servers - Leader - check the zone for follower
+  when: inventory_hostname == opennebula_ha_leader
+  command:     "onezone show 0"
+  register:    onezone_show_0_check_follower
+  until:       "'error' not in onezone_show_0_check_follower.stdout and 'follower' in onezone_show_0_check_follower.stdout and onezone_show_0_check_follower.rc == 0"
+  retries:     5
+  delay:       1

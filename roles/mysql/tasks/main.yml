@@ -1,0 +1,30 @@
+---
+
+- name: Install MYSQL
+  yum:
+    name: mariadb-server
+    state: present
+
+- name: Install the Python MySQL Support Libraries
+  yum: pkg=MySQL-python state=latest
+
+- name: start mysql server and enable it on reboot
+  service: name=mariadb state=started enabled=true 
+
+- name: update mysql root password for all root accounts
+  mysql_user:
+    name: root
+    host: "{{ item }}"
+    password: "{{ mysql_root_password }}"
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    check_implicit_admin: yes
+    priv: "*.*:ALL,GRANT"
+  with_items:
+    - "{{ ansible_hostname }}"
+    - 127.0.0.1
+    - ::1
+    - localhost
+
+- name: Create Opennebula DB
+  mysql_db: name=opennebula state=present login_user=root login_password={{ mysql_root_password }}

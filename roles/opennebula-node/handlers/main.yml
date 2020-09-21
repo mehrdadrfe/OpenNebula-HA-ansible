@@ -1,0 +1,3 @@
+---
+- name: restart opennebula
+  action: service name=opennebula state=restarted

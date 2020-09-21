@@ -1,0 +1,164 @@
+---
+
+- name: Install epel yum repository
+  yum:
+    name: epel-release
+    state: present
+
+- name: Install libselinux-python (required by ansible to manage selinux)
+  yum:
+    name: libselinux-python
+    state: present
+
+- name: Set SELinux in Permissive mode
+  selinux:
+    policy: targeted
+    state: permissive
+
+- name: Stop and disable firewalld.
+  service:
+    name: firewalld
+    state: stopped
+    enabled: False
+
+- name: install required dependencies to build ruby gems
+  yum:
+    name: "{{ item }}"
+    state: installed
+  with_items:
+    - ruby-devel
+    - make
+    - gcc
+    - curl-devel
+    - expat-devel
+    - libxml2-devel
+    - libxslt-devel
+    - rubygem-rake
+    - gcc-c++
+    - sqlite-devel
+    - mysql-devel
+    - redhat-lsb-core
+    - patch
+    - readline
+    - readline-devel
+    - zlib
+    - zlib-devel
+    - openssl-devel
+    - bzip2
+    - autoconf
+    - automake
+    - libtool
+    - bison
+    - libyaml-devel
+    - libffi-devel
+
+- name: install Opennebula server packages
+  yum:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - opennebula-server
+    - opennebula-sunstone
+
+- name: Edit /etc/one/oned.conf so it listens in all interfaces (default is localhost only)
+  lineinfile:
+    dest: /etc/one/oned.conf
+    backup: yes
+    regexp: "^LISTEN_ADDRESS :  \"127.0.0.1\""
+    line: "LISTEN_ADDRESS :  \"0.0.0.0\""
+
+- name: Get RVM Pubkey
+  shell: "{{item}}"
+  with_items:
+    - curl -sSL https://rvm.io/mpapis.asc | gpg2 --import -
+    - curl -sSL https://rvm.io/pkuczynski.asc | gpg2 --import -
+
+- name: Get RVM Package & Install RVM
+  shell: "{{item}}"
+  with_items:
+    - curl -L get.rvm.io | bash -s stable
+    - source /etc/profile.d/rvm.sh
+
+- name: Install Ruby
+  shell: 'bash -lc "{{item}}"'
+  with_items:
+    - rvm reload
+    - rvm install 2.3.3
+    - rvm use 2.3.3 --default
+    - gem install bundler
+    - rm -rf /usr/bin/ruby /usr/bin/bundler /usr/bin/ruby_executable_hooks
+    - ln -s /usr/local/rvm/rubies/ruby-2.3.3/bin/ruby /usr/bin/ruby
+    - ln -s /usr/local/rvm/gems/ruby-2.3.3/bin/bundler /usr/bin/bundler
+    - ln -s /usr/local/rvm/gems/ruby-2.3.3/bin/ruby_executable_hooks /usr/bin/ruby_executable_hooks
+
+- name: Check that the /usr/share/one/gems exists
+  stat:
+    path: /usr/share/one/gems
+  register: stat_result
+
+- name: Unlink the file, if it exists
+  shell: 'bash -lc "unlink /usr/share/one/gems"'
+  when: stat_result.stat.exists
+
+- name: Check Ruby Version
+  shell: "ruby -v | awk '{print $2}'"
+  environment:
+    PATH: /usr/local/rvm/rubies/ruby-2.3.3/bin/:/usr/local/rvm/gems/ruby-2.3.3/bin/:{{ ansible_env.PATH }}
+  register: ruby_installed_version
+
+- name: Ruby | print version
+  debug:
+    msg: "{{ruby_installed_version.stdout}}"
+
+- name: Install required ruby gems
+  shell:  yes | /usr/share/one/install_gems
+  environment:
+          PATH: /usr/local/rvm/rubies/ruby-2.3.3/bin/:/usr/local/rvm/gems/ruby-2.3.3/bin/:/usr/local/rvm/rubies/ruby-2.3.3/lib/ruby/gems/2.3.0/bin/:{{ ansible_env.PATH }}
+
+- name: Copy oneadmin user ssh config
+  template:
+    src: oneadmin_ssh_config
+    dest: /var/lib/one/.ssh/config
+    owner: oneadmin
+    mode: 600
+
+- name: Enable and start services
+  service:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+  with_items:
+    - opennebula
+    - opennebula-sunstone
+
+- include_role:
+    name: mysql
+
+- name: deploy oned.conf
+  template:
+    src: "oned.conf"
+    dest: /etc/one/oned.conf
+    owner: root
+    group: oneadmin
+    mode: 0640
+
+- name: Clean Auth path
+  file:
+    state: absent
+    path: "/var/lib/one/.one/{{ item }}"
+  with_items:
+    - ec2_auth
+    - occi_auth
+    - oneflow_auth
+    - onegate_auth
+    - one_key
+    - sunstone_auth
+
+- name: set oneadmin pwd
+  template:
+    src: "one_auth"
+    dest: /var/lib/one/.one/one_auth
+    owner: oneadmin
+    group: oneadmin
+    mode: 0600
+  notify: restart opennebula

@@ -1,0 +1,4 @@
+---
+opennebula_ha_leader: 192.168.10.31
+opennebula_ha_follower: 192.168.10.33
+oneadmin_pwd: StrongPassword
