@@ -34,7 +34,7 @@
   when: inventory_hostname == opennebula_ha_leader
   service:
     name:     "{{ item }}"
-    state:    started
+    state:    restarted
     enabled:  true
   with_items:
     - opennebula
@@ -148,6 +148,13 @@
     path:   /etc/one/oned.conf
     regexp: '^(\s)*SERVER_ID(\s)+=(\s)+.*,.*'
     line:   "SERVER_ID = {{ groups['one'].index(inventory_hostname) }},  # MODIFIED BY ANSIBLE"
+
+- name: Adding more servers - Follower - Import database backup to Follower
+  when: inventory_hostname == opennebula_ha_follower
+  command: "onedb restore -f -u root -p {{ oneadmin_pwd }} -d opennebula /tmp/my_backup.db"
+  become:      yes
+  become_user: oneadmin
+  delegate_to: "{{ opennebula_ha_follower }}"
 
 - name: Adding more servers - Follower - Start OpenNebula
   when: inventory_hostname == opennebula_ha_follower
